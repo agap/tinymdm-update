@@ -12,8 +12,15 @@ dependencies = [
     "rich>=13.0",
 ]
 
-[project.scripts]
-tinymdm-update = "tinymdm_update:main"
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-mock>=3.12",
+]
 
-[tool.setuptools]
-py-modules = ["tinymdm_update"]
+[project.scripts]
+tinymdm-update = "tinymdm_update.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["tinymdm_update*"]

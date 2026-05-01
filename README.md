@@ -1,59 +1,115 @@
 # tinymdm-update
 
-CLI tool for batch-updating apps across TinyMDM policies without fighting the web UI.
+A command-line tool for pushing app updates across multiple TinyMDM policies in one go.
 
-TinyMDM's interface resets its filters after every policy update, making it tedious to update the same app across a handful of policies one by one. This tool lets you configure a short watchlist of policies and tracked apps, then shows you at a glance which ones are outdated and fires the update API calls for all selected policies in one go.
+TinyMDM's web interface resets its filters after every policy update, making it tedious to roll out the same app update across a handful of policies one by one. This tool lets you maintain a short watchlist of policies and apps, then shows which policies are likely out of date and fires all update requests with a single confirmation.
 
 ## Features
 
-- **One-time setup** — pick your watched policies (e.g. 6 out of 58) and the apps to track; saved to `~/.config/tinymdm-update/config.json`
-- **Version status at a glance** — compares the installed version in each policy against the latest version in the TinyMDM Store; outdated policies are pre-checked
-- **Multi-app support** — track several apps; choose which one(s) to process each session
-- **Rich terminal output** — spinner while fetching, interactive checkboxes, result table with per-policy status
+- **One-time setup** — interactively pick the policies and apps you care about; saved to `~/.config/tinymdm-update/config.json`
+- **Re-runnable setup** — existing selections are pre-checked so re-configuring is non-destructive
+- **Update history** — every successful push is timestamped; future runs show when each policy was last updated and flag it as stale if the store has published a newer version since
+- **Smart pre-selection** — policies where the store version is newer than your last push are pre-checked automatically
+- **Aligned policy list** — fixed-width columns make it easy to scan status at a glance
+- **Multi-app support** — track several apps; choose which to process each session
+- **Manager API support** — works with TinyMDM's Manager API so one set of credentials can manage multiple accounts
+
+## Requirements
+
+- Python 3.9+
+- [pipx](https://pipx.pypa.io) for installation
+- A TinyMDM Manager account with API access
 
 ## Installation
 
-Requires Python 3.9+.
+```bash
+pipx install git+https://github.com/agap/tinymdm-update.git
+```
+
+`tinymdm-update` will be available globally with no virtualenv management needed. To update to the latest version:
 
 ```bash
-pip install -e .
+pipx upgrade tinymdm-update
 ```
 
 ## Configuration
 
-Set your TinyMDM API credentials as environment variables (add to `.bashrc` / `.zshrc` or a `.env` file):
+Set your TinyMDM Manager API credentials as environment variables (add to `.bashrc`, `.zshrc`, or a `.env` file):
 
 ```bash
-export TINYMDM_PUBLIC_KEY=your_public_key
-export TINYMDM_SECRET_KEY=your_secret_key
+export TINYMDM_PUBLIC_KEY=your_manager_public_key
+export TINYMDM_SECRET_KEY=your_manager_secret_key
+export TINYMDM_ACCOUNT_ID=the_account_id_to_manage
 ```
+
+These correspond to the `X-Tinymdm-Manager-Apikey-Public`, `X-Tinymdm-Manager-Apikey-Secret`, and `X-Account-Id` headers defined in the [TinyMDM Manager API](https://www.tinymdm.net/mobile-device-management/api/) docs. The account ID can be retrieved from the `managers/manageable_accounts` endpoint.
 
 ## Usage
 
-**First run — configure watchlist:**
+### First run — configure your watchlist
 
 ```bash
 tinymdm-update setup
 ```
 
-Fetches all policies, lets you pick the ones you care about, then picks the app(s) to track.
+Fetches all policies from TinyMDM, lets you select the ones you want to watch, then shows the apps installed in the first selected policy for you to track. Re-running setup at any time pre-checks your existing selections so you can add or remove entries without starting from scratch.
 
-**Daily use — update outdated policies:**
+### Daily use — roll out updates
 
 ```bash
 tinymdm-update
 ```
 
-Shows watched policies with version status (`↑ outdated` / `✓ up-to-date`), outdated ones pre-checked. Confirm selection and updates fire immediately.
+For each tracked app the prompt title shows the latest version available in the TinyMDM store and its release date. Each policy row shows its name alongside its update status:
 
-**Troubleshooting / API field discovery:**
+```
+Select policies to update  —  latest: v4.41, released Apr 12, 2026:
+ » ↑  Warehouse Android         ↑  last pushed Feb 10, 2026
+   ↑  Driver Tablets            ↑  last pushed Jan 28, 2026
+   ○  Office Kiosks             ✓  last pushed Apr 15, 2026
+   ○  QA Device Pool            ?  no update recorded
+   ○  Legacy Pilot Group        -  not installed
+```
+
+| Symbol | Meaning |
+|--------|---------|
+| `↑` | Store has a newer version than your last push — pre-checked |
+| `✓` | Store has not been updated since your last push |
+| `?` | App is installed but never updated via this tool |
+| `-` | App is not installed in this policy |
+
+Confirm the selection and all update requests fire immediately. Successful pushes are recorded in the local history so future runs can detect staleness automatically.
+
+### Troubleshooting / API field discovery
 
 ```bash
+tinymdm-update setup --debug
 tinymdm-update --debug
 ```
 
-Prints raw API response objects so you can confirm version field names if version comparison shows `?`.
+Prints raw API response objects, useful if version fields or app names aren't displaying as expected.
 
-## API
+## Development
 
-Uses the [TinyMDM REST API](https://www.tinymdm.net/mobile-device-management/api/) (`https://www.tinymdm.net/api/v1/`). Credentials are passed via `X-Tinymdm-Apikey-Public` and `X-Tinymdm-Apikey-Secret` headers.
+```bash
+git clone https://github.com/agap/tinymdm-update.git
+cd tinymdm-update
+python -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+```
+
+Run the test suite:
+
+```bash
+pytest
+```
+
+41 tests cover config helpers, the API client, and command business logic. No real API credentials are needed — all network calls are mocked.
+
+## Contributing
+
+Bug reports and pull requests are welcome. For significant changes please open an issue first to discuss what you'd like to change.
+
+## License
+
+[MIT](LICENSE)
