@@ -10,6 +10,8 @@ TinyMDM's web interface resets its filters after every policy update, making it 
 - **Re-runnable setup** — existing selections are pre-checked so re-configuring is non-destructive
 - **Update history** — every successful push is timestamped; future runs show when each policy was last updated and flag it as stale if the store has published a newer version since
 - **Smart pre-selection** — policies where the store version is newer than your last push are pre-checked automatically
+- **Prioritized ordering** — stale policies float to the top, with ties broken by user count ascending so the smallest rollouts come first
+- **User counts** — every policy row shows how many users are assigned, helping you stage updates from least to most disruptive
 - **Aligned policy list** — fixed-width columns make it easy to scan status at a glance
 - **Multi-app support** — track several apps; choose which to process each session
 - **Manager API support** — works with TinyMDM's Manager API so one set of credentials can manage multiple accounts
@@ -60,15 +62,15 @@ Fetches all policies from TinyMDM, lets you select the ones you want to watch, t
 tinymdm-update
 ```
 
-For each tracked app the prompt title shows the latest version available in the TinyMDM store and its release date. Each policy row shows its name alongside its update status:
+For each tracked app the prompt title shows the latest version available in the TinyMDM store and its release date. Each policy row shows its name, the number of users assigned to it, and its update status. Rows needing an update float to the top, and ties break by user count ascending so the smallest rollouts surface first:
 
 ```
 Select policies to update  —  latest: v4.41, released Apr 12, 2026:
- » ↑  Warehouse Android         ↑  last pushed Feb 10, 2026
-   ↑  Driver Tablets            ↑  last pushed Jan 28, 2026
-   ○  Office Kiosks             ✓  last pushed Apr 15, 2026
-   ○  QA Device Pool            ?  no update recorded
-   ○  Legacy Pilot Group        -  not installed
+ » ↑  Driver Tablets          3 users    ↑  last pushed Jan 28, 2026
+   ↑  Warehouse Android      18 users    ↑  last pushed Feb 10, 2026
+   ○  QA Device Pool          2 users    ?  no update recorded
+   ○  Office Kiosks          24 users    ✓  last pushed Apr 15, 2026
+   ○  Legacy Pilot Group     47 users    -  not installed
 ```
 
 | Symbol | Meaning |
