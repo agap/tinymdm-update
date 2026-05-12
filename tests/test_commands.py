@@ -28,11 +28,12 @@ def mock_response(ok=True, status_code=200):
     resp.status_code = status_code
     return resp
 
-def make_client(policies=None, store_apps=None, policy_app_ids=None, update_ok=True):
+def make_client(policies=None, store_apps=None, policy_app_ids=None, update_ok=True, users=None):
     client = MagicMock()
     client.fetch_policies.return_value = policies or [make_policy()]
     client.fetch_store_apps.return_value = store_apps or [make_store_app()]
     client.fetch_policy_app_ids.return_value = policy_app_ids if policy_app_ids is not None else {"app1"}
+    client.fetch_users.return_value = users if users is not None else []
     client.update_policy_app.return_value = mock_response(ok=update_ok, status_code=200 if update_ok else 400)
     return client
 

@@ -161,6 +161,16 @@ def cmd_update(
         console.print("[yellow]None of the watched policy IDs were found.[/yellow]")
         return 0
 
+    users_per_policy: dict[str, int] = {}
+    with console.status("Fetching users..."):
+        try:
+            for user in client.fetch_users():
+                pid = user.get("policy_id")
+                if pid:
+                    users_per_policy[pid] = users_per_policy.get(pid, 0) + 1
+        except requests.HTTPError as exc:
+            console.print(f"[yellow]Could not fetch users: {exc}[/yellow]")
+
     any_failure = False
 
     for app in apps_to_process:
@@ -221,17 +231,24 @@ def cmd_update(
                 middle = f"last pushed {last_str}"
             else:
                 status, middle = "?", "no update recorded"
-            rows.append((status, middle, pname, ps))
+            user_count = users_per_policy.get(ps["policy"]["id"], 0)
+            rows.append((status, middle, pname, user_count, ps))
 
-        name_width = max(len(pname) for _, _, pname, _ in rows)
+        rows.sort(key=lambda r: (not r[4]["needs_update"], r[3]))
+
+        name_width = max(len(pname) for _, _, pname, _, _ in rows)
+        ucount_strs = [
+            f"{u} user{'s' if u != 1 else ''}" for _, _, _, u, _ in rows
+        ]
+        ucount_width = max(len(s) for s in ucount_strs)
 
         choices = [
             questionary.Choice(
-                title=f"  {pname:<{name_width}}    {status}  {middle}",
+                title=f"  {pname:<{name_width}}    {ucount_str:>{ucount_width}}    {status}  {middle}",
                 value=ps,
                 checked=bool(ps["needs_update"]),
             )
-            for status, middle, pname, ps in rows
+            for (status, middle, pname, _, ps), ucount_str in zip(rows, ucount_strs)
         ]
 
         prompt = "Select policies to update"

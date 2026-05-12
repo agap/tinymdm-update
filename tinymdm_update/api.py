@@ -56,6 +56,9 @@ class TinyMDMClient:
     def fetch_store_apps(self) -> list:
         return self.fetch_all("tinymdm_store")
 
+    def fetch_users(self) -> list:
+        return self.fetch_all("users")
+
     def update_policy_app(self, policy_id: str, app_id: str) -> requests.Response:
         return requests.post(
             f"{self._base_url}policies/{policy_id}/applications/update",
