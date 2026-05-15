@@ -31,7 +31,7 @@ def mock_response(json_data, status_code=200):
 def test_fetch_all_single_page(mocker):
     client = make_client()
     mocker.patch(
-        "requests.get",
+        "requests.Session.get",
         return_value=mock_response({"results": [{"id": "a"}, {"id": "b"}], "next": None}),
     )
     assert client.fetch_all("policies") == [{"id": "a"}, {"id": "b"}]
@@ -40,17 +40,17 @@ def test_fetch_all_pagination(mocker):
     client = make_client()
     page1 = mock_response({"results": [{"id": "a"}], "next": BASE + "policies?page=2"})
     page2 = mock_response({"results": [{"id": "b"}], "next": None})
-    mocker.patch("requests.get", side_effect=[page1, page2])
+    mocker.patch("requests.Session.get", side_effect=[page1, page2])
     assert client.fetch_all("policies") == [{"id": "a"}, {"id": "b"}]
 
 def test_fetch_all_list_response(mocker):
     client = make_client()
-    mocker.patch("requests.get", return_value=mock_response([{"id": "x"}]))
+    mocker.patch("requests.Session.get", return_value=mock_response([{"id": "x"}]))
     assert client.fetch_all("some/path") == [{"id": "x"}]
 
 def test_fetch_all_raises_on_http_error(mocker):
     client = make_client()
-    mocker.patch("requests.get", return_value=mock_response({}, status_code=404))
+    mocker.patch("requests.Session.get", return_value=mock_response({}, status_code=404))
     with pytest.raises(requests.HTTPError):
         client.fetch_all("policies")
 
@@ -62,19 +62,19 @@ def test_fetch_all_raises_on_http_error(mocker):
 def test_fetch_policy_app_ids_returns_set(mocker):
     client = make_client()
     mocker.patch(
-        "requests.get",
+        "requests.Session.get",
         return_value=mock_response({"applications_id": ["app1", "app2"]}),
     )
     assert client.fetch_policy_app_ids("pol1") == {"app1", "app2"}
 
 def test_fetch_policy_app_ids_missing_key_returns_empty_set(mocker):
     client = make_client()
-    mocker.patch("requests.get", return_value=mock_response({}))
+    mocker.patch("requests.Session.get", return_value=mock_response({}))
     assert client.fetch_policy_app_ids("pol1") == set()
 
 def test_fetch_policy_app_ids_raises_on_http_error(mocker):
     client = make_client()
-    mocker.patch("requests.get", return_value=mock_response({}, status_code=403))
+    mocker.patch("requests.Session.get", return_value=mock_response({}, status_code=403))
     with pytest.raises(requests.HTTPError):
         client.fetch_policy_app_ids("pol1")
 
@@ -86,21 +86,21 @@ def test_fetch_policy_app_ids_raises_on_http_error(mocker):
 def test_update_policy_app_returns_response_on_success(mocker):
     client = make_client()
     resp = mock_response({"app_type": "tinymdm_store_app", "id": "app1"}, status_code=200)
-    mocker.patch("requests.post", return_value=resp)
+    mocker.patch("requests.Session.post", return_value=resp)
     result = client.update_policy_app("pol1", "app1")
     assert result.ok is True
 
 def test_update_policy_app_returns_response_on_failure(mocker):
     client = make_client()
     resp = mock_response({}, status_code=400)
-    mocker.patch("requests.post", return_value=resp)
+    mocker.patch("requests.Session.post", return_value=resp)
     result = client.update_policy_app("pol1", "app1")
     assert result.ok is False
     assert result.status_code == 400
 
 def test_update_policy_app_sends_correct_payload(mocker):
     client = make_client()
-    mock_post = mocker.patch("requests.post", return_value=mock_response({}))
+    mock_post = mocker.patch("requests.Session.post", return_value=mock_response({}))
     client.update_policy_app("pol1", "app1")
     _, kwargs = mock_post.call_args
     assert kwargs["json"] == {"app_type": "tinymdm_store_app", "id": "app1"}

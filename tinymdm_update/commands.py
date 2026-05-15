@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 import questionary
@@ -148,8 +149,38 @@ def cmd_update(
     else:
         apps_to_process = tracked_apps
 
-    with console.status("Fetching policies..."):
-        all_policies = client.fetch_policies()
+    with console.status("Loading policies, users, store catalog, and policy contents..."):
+        with ThreadPoolExecutor(max_workers=min(8, 3 + len(watched_ids))) as pool:
+            policies_future = pool.submit(client.fetch_policies)
+            users_future = pool.submit(client.fetch_users)
+            store_future = pool.submit(client.fetch_store_apps)
+            policy_app_ids_futures = {
+                pid: pool.submit(client.fetch_policy_app_ids, pid)
+                for pid in watched_ids
+            }
+
+            all_policies = policies_future.result()
+
+            try:
+                users = users_future.result()
+            except requests.HTTPError as exc:
+                console.print(f"[yellow]Could not fetch users: {exc}[/yellow]")
+                users = []
+
+            try:
+                store_apps = store_future.result()
+            except requests.HTTPError as exc:
+                console.print(f"[yellow]Could not fetch store catalog: {exc}[/yellow]")
+                store_apps = []
+
+            policy_app_ids: dict[str, set[str]] = {}
+            for pid, fut in policy_app_ids_futures.items():
+                try:
+                    policy_app_ids[pid] = fut.result()
+                except requests.HTTPError as exc:
+                    console.print(f"[yellow]Could not fetch apps for policy {pid}: {exc}[/yellow]")
+                    policy_app_ids[pid] = set()
+
     policy_by_id = {p["id"]: p for p in all_policies}
     watched_policies = [policy_by_id[pid] for pid in watched_ids if pid in policy_by_id]
 
@@ -162,14 +193,15 @@ def cmd_update(
         return 0
 
     users_per_policy: dict[str, int] = {}
-    with console.status("Fetching users..."):
-        try:
-            for user in client.fetch_users():
-                pid = user.get("policy_id")
-                if pid:
-                    users_per_policy[pid] = users_per_policy.get(pid, 0) + 1
-        except requests.HTTPError as exc:
-            console.print(f"[yellow]Could not fetch users: {exc}[/yellow]")
+    for user in users:
+        pid = user.get("policy_id")
+        if pid:
+            users_per_policy[pid] = users_per_policy.get(pid, 0) + 1
+
+    store_by_id = {a["id"]: a for a in store_apps if a.get("id")}
+    if debug and store_apps:
+        console.print("[dim]First store app object (raw):[/dim]")
+        console.print(store_apps[0])
 
     any_failure = False
 
@@ -179,46 +211,34 @@ def cmd_update(
 
         latest_version = "?"
         store_updated_dt: datetime | None = None
-        with console.status(f"Fetching latest store version for {app_label}..."):
-            try:
-                store_apps = client.fetch_store_apps()
-                if debug and store_apps:
-                    console.print("[dim]First store app object (raw):[/dim]")
-                    console.print(store_apps[0])
-                store_match = next(
-                    (a for a in store_apps if a.get("id") == app["id"]), None
-                )
-                if store_match:
-                    latest_version = extract_version(store_match)
-                    store_updated_dt = parse_store_date(store_match.get("last_update_date", ""))
-                else:
-                    console.print(
-                        f"[yellow]App {app['id']} not found in store catalog "
-                        f"— version comparison unavailable.[/yellow]"
-                    )
-            except requests.HTTPError as exc:
-                console.print(f"[yellow]Could not fetch store catalog: {exc}[/yellow]")
+        store_match = store_by_id.get(app["id"])
+        if store_match:
+            latest_version = extract_version(store_match)
+            store_updated_dt = parse_store_date(store_match.get("last_update_date", ""))
+        elif store_apps:
+            console.print(
+                f"[yellow]App {app['id']} not found in store catalog "
+                f"— version comparison unavailable.[/yellow]"
+            )
 
         store_updated_str = store_updated_dt.strftime("%b %d, %Y") if store_updated_dt else ""
 
         policy_status = []
-        with console.status("Checking installed apps across watched policies..."):
-            for policy in watched_policies:
-                policy_app_ids = client.fetch_policy_app_ids(policy["id"])
-                is_installed = app["id"] in policy_app_ids
-                last_updated_dt = get_last_update(cfg, policy["id"], app["id"])
-                needs_update = bool(
-                    is_installed
-                    and store_updated_dt
-                    and last_updated_dt
-                    and store_updated_dt > last_updated_dt
-                )
-                policy_status.append({
-                    "policy": policy,
-                    "is_installed": is_installed,
-                    "last_updated_dt": last_updated_dt,
-                    "needs_update": needs_update,
-                })
+        for policy in watched_policies:
+            is_installed = app["id"] in policy_app_ids.get(policy["id"], set())
+            last_updated_dt = get_last_update(cfg, policy["id"], app["id"])
+            needs_update = bool(
+                is_installed
+                and store_updated_dt
+                and last_updated_dt
+                and store_updated_dt > last_updated_dt
+            )
+            policy_status.append({
+                "policy": policy,
+                "is_installed": is_installed,
+                "last_updated_dt": last_updated_dt,
+                "needs_update": needs_update,
+            })
 
         rows = []
         for ps in policy_status:

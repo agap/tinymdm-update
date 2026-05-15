@@ -166,3 +166,130 @@ def test_cmd_update_returns_0_on_success(mocker):
 def test_cmd_update_returns_1_when_no_config(mocker):
     result = cmd_update(MagicMock(), {}, silent_console())
     assert result == 1
+
+
+# ---------------------------------------------------------------------------
+# Fetch efficiency — store catalog and policy app-ids should be fetched once
+# ---------------------------------------------------------------------------
+
+def _checkbox_mock(app_selection):
+    """Mock questionary.checkbox so the first call returns app_selection and
+    every subsequent call (the per-app policy prompts) returns []."""
+    calls = {"n": 0}
+
+    def factory(prompt, choices):
+        calls["n"] += 1
+        result = app_selection if calls["n"] == 1 else []
+        return MagicMock(ask=MagicMock(return_value=result))
+
+    return factory
+
+
+def test_store_catalog_fetched_once_across_multiple_apps(mocker):
+    apps = [make_app("app1"), make_app("app2"), make_app("app3")]
+    cfg = {
+        "watched_policy_ids": ["pol1", "pol2"],
+        "tracked_apps": apps,
+    }
+    client = make_client(
+        policies=[make_policy("pol1"), make_policy("pol2")],
+        store_apps=[make_store_app("app1"), make_store_app("app2"), make_store_app("app3")],
+    )
+
+    mocker.patch("questionary.checkbox", side_effect=_checkbox_mock(apps))
+    mocker.patch("tinymdm_update.commands.save_config", lambda cfg, **kw: None)
+
+    cmd_update(client, cfg, silent_console())
+
+    assert client.fetch_store_apps.call_count == 1
+
+
+def test_policy_app_ids_fetched_once_per_policy(mocker):
+    apps = [make_app("app1"), make_app("app2")]
+    cfg = {
+        "watched_policy_ids": ["pol1", "pol2", "pol3"],
+        "tracked_apps": apps,
+    }
+    client = make_client(
+        policies=[make_policy("pol1"), make_policy("pol2"), make_policy("pol3")],
+        store_apps=[make_store_app("app1"), make_store_app("app2")],
+    )
+
+    mocker.patch("questionary.checkbox", side_effect=_checkbox_mock(apps))
+    mocker.patch("tinymdm_update.commands.save_config", lambda cfg, **kw: None)
+
+    cmd_update(client, cfg, silent_console())
+
+    assert client.fetch_policy_app_ids.call_count == 3
+    called_pids = {call.args[0] for call in client.fetch_policy_app_ids.call_args_list}
+    assert called_pids == {"pol1", "pol2", "pol3"}
+
+
+def test_fetch_users_failure_does_not_abort(mocker):
+    cfg = {
+        "watched_policy_ids": ["pol1"],
+        "tracked_apps": [make_app()],
+    }
+    client = make_client()
+    client.fetch_users.side_effect = requests.HTTPError("boom")
+
+    captured_choices = {}
+    def fake_checkbox(prompt, choices):
+        captured_choices["choices"] = choices
+        return MagicMock(ask=MagicMock(return_value=[]))
+    mocker.patch("questionary.checkbox", side_effect=fake_checkbox)
+    mocker.patch("tinymdm_update.commands.save_config", lambda cfg, **kw: None)
+
+    cmd_update(client, cfg, silent_console())
+
+    assert "choices" in captured_choices
+
+
+def test_fetch_policy_app_ids_failure_falls_back_to_empty(mocker):
+    cfg = {
+        "watched_policy_ids": ["pol1"],
+        "tracked_apps": [make_app()],
+    }
+    client = make_client()
+    client.fetch_policy_app_ids.side_effect = requests.HTTPError("boom")
+
+    captured_choices = {}
+    def fake_checkbox(prompt, choices):
+        captured_choices["choices"] = choices
+        return MagicMock(ask=MagicMock(return_value=[]))
+    mocker.patch("questionary.checkbox", side_effect=fake_checkbox)
+    mocker.patch("tinymdm_update.commands.save_config", lambda cfg, **kw: None)
+
+    cmd_update(client, cfg, silent_console())
+
+    # The single policy should still render, marked as "not installed".
+    assert len(captured_choices["choices"]) == 1
+
+
+def test_user_counts_aggregated_per_policy(mocker):
+    cfg = {
+        "watched_policy_ids": ["pol1", "pol2"],
+        "tracked_apps": [make_app()],
+    }
+    client = make_client(
+        policies=[make_policy("pol1", "Policy One"), make_policy("pol2", "Policy Two")],
+        users=[
+            {"id": "u1", "policy_id": "pol1"},
+            {"id": "u2", "policy_id": "pol1"},
+            {"id": "u3", "policy_id": "pol2"},
+            {"id": "u4", "policy_id": None},
+        ],
+    )
+
+    captured_choices = {}
+    def fake_checkbox(prompt, choices):
+        captured_choices["choices"] = choices
+        return MagicMock(ask=MagicMock(return_value=[]))
+    mocker.patch("questionary.checkbox", side_effect=fake_checkbox)
+    mocker.patch("tinymdm_update.commands.save_config", lambda cfg, **kw: None)
+
+    cmd_update(client, cfg, silent_console())
+
+    titles = [c.title for c in captured_choices["choices"]]
+    assert any("2 users" in t and "Policy One" in t for t in titles)
+    assert any("1 user " in t and "Policy Two" in t for t in titles)

@@ -20,18 +20,19 @@ class TinyMDMClient:
         base_url: str = BASE_URL,
     ) -> None:
         self._base_url = base_url
-        self._headers = {
+        self._session = requests.Session()
+        self._session.headers.update({
             "X-Tinymdm-Manager-Apikey-Public": public_key,
             "X-Tinymdm-Manager-Apikey-Secret": secret_key,
             "X-Account-Id": account_id,
             "Content-Type": "application/json",
-        }
+        })
 
     def fetch_all(self, path: str) -> list:
         url = self._base_url + path
         results = []
         while url:
-            resp = requests.get(url, headers=self._headers, timeout=30)
+            resp = self._session.get(url, timeout=30)
             resp.raise_for_status()
             data = resp.json()
             if isinstance(data, list):
@@ -42,9 +43,8 @@ class TinyMDMClient:
         return results
 
     def fetch_policy_app_ids(self, policy_id: str) -> set[str]:
-        resp = requests.get(
+        resp = self._session.get(
             f"{self._base_url}policies/{policy_id}/applications",
-            headers=self._headers,
             timeout=30,
         )
         resp.raise_for_status()
@@ -60,10 +60,9 @@ class TinyMDMClient:
         return self.fetch_all("users")
 
     def update_policy_app(self, policy_id: str, app_id: str) -> requests.Response:
-        return requests.post(
+        return self._session.post(
             f"{self._base_url}policies/{policy_id}/applications/update",
             json={"app_type": "tinymdm_store_app", "id": app_id},
-            headers=self._headers,
             timeout=30,
         )
 
