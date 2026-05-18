@@ -138,7 +138,7 @@ def cmd_update(
                 questionary.Choice(
                     title=app.get("name", app["id"]),
                     value=app,
-                    checked=True,
+                    checked=False,
                 )
                 for app in tracked_apps
             ],
@@ -266,7 +266,7 @@ def cmd_update(
             questionary.Choice(
                 title=f"  {pname:<{name_width}}    {ucount_str:>{ucount_width}}    {status}  {middle}",
                 value=ps,
-                checked=bool(ps["needs_update"]),
+                checked=False,
             )
             for (status, middle, pname, _, ps), ucount_str in zip(rows, ucount_strs)
         ]
