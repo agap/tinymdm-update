@@ -262,9 +262,20 @@ def cmd_update(
         ]
         ucount_width = max(len(s) for s in ucount_strs)
 
+        status_styles = {
+            "↑": "fg:#f97316 bold",
+            "✓": "fg:#22c55e",
+            "?": "fg:#9ca3af",
+            "-": "fg:#6b7280",
+        }
+
         choices = [
             questionary.Choice(
-                title=f"  {pname:<{name_width}}    {ucount_str:>{ucount_width}}    {status}  {middle}",
+                title=[
+                    ("", f"  {pname:<{name_width}}    {ucount_str:>{ucount_width}}    "),
+                    (status_styles.get(status, ""), status),
+                    ("", f"  {middle}"),
+                ],
                 value=ps,
                 checked=False,
             )
