@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import os
+import time
 
 import requests
 
 BASE_URL = "https://www.tinymdm.net/api/v1/"
+
+_MAX_RETRIES = 4
+_BACKOFF_BASE = 1.0
 
 
 class CredentialError(Exception):
@@ -28,11 +32,25 @@ class TinyMDMClient:
             "Content-Type": "application/json",
         })
 
+    def _request_with_retry(self, method: str, url: str, **kwargs) -> requests.Response:
+        fn = self._session.get if method == "GET" else self._session.post
+        for attempt in range(_MAX_RETRIES + 1):
+            resp = fn(url, **kwargs)
+            if resp.status_code != 429 or attempt == _MAX_RETRIES:
+                return resp
+            raw = resp.headers.get("Retry-After", "")
+            try:
+                wait = float(raw)
+            except (ValueError, TypeError):
+                wait = _BACKOFF_BASE * (2 ** attempt)
+            time.sleep(min(wait, 60.0))
+        return resp  # unreachable
+
     def fetch_all(self, path: str) -> list:
         url = self._base_url + path
         results = []
         while url:
-            resp = self._session.get(url, timeout=30)
+            resp = self._request_with_retry("GET", url, timeout=30)
             resp.raise_for_status()
             data = resp.json()
             if isinstance(data, list):
@@ -43,7 +61,8 @@ class TinyMDMClient:
         return results
 
     def fetch_policy_app_ids(self, policy_id: str) -> set[str]:
-        resp = self._session.get(
+        resp = self._request_with_retry(
+            "GET",
             f"{self._base_url}policies/{policy_id}/applications",
             timeout=30,
         )
@@ -60,7 +79,8 @@ class TinyMDMClient:
         return self.fetch_all("users")
 
     def update_policy_app(self, policy_id: str, app_id: str) -> requests.Response:
-        return self._session.post(
+        return self._request_with_retry(
+            "POST",
             f"{self._base_url}policies/{policy_id}/applications/update",
             json={"app_type": "tinymdm_store_app", "id": app_id},
             timeout=30,

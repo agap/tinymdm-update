@@ -54,6 +54,34 @@ def test_fetch_all_raises_on_http_error(mocker):
     with pytest.raises(requests.HTTPError):
         client.fetch_all("policies")
 
+def test_fetch_all_retries_on_429(mocker):
+    client = make_client()
+    resp_429 = mock_response({}, status_code=429)
+    resp_429.headers = {}
+    resp_ok = mock_response({"results": [{"id": "a"}], "next": None})
+    mocker.patch("time.sleep")
+    mocker.patch("requests.Session.get", side_effect=[resp_429, resp_ok])
+    assert client.fetch_all("policies") == [{"id": "a"}]
+
+def test_fetch_all_uses_retry_after_header(mocker):
+    client = make_client()
+    resp_429 = mock_response({}, status_code=429)
+    resp_429.headers = {"Retry-After": "5"}
+    resp_ok = mock_response({"results": [], "next": None})
+    mock_sleep = mocker.patch("time.sleep")
+    mocker.patch("requests.Session.get", side_effect=[resp_429, resp_ok])
+    client.fetch_all("policies")
+    mock_sleep.assert_called_once_with(5.0)
+
+def test_fetch_all_raises_after_max_retries_on_429(mocker):
+    client = make_client()
+    resp_429 = mock_response({}, status_code=429)
+    resp_429.headers = {}
+    mocker.patch("time.sleep")
+    mocker.patch("requests.Session.get", return_value=resp_429)
+    with pytest.raises(requests.HTTPError):
+        client.fetch_all("policies")
+
 
 # ---------------------------------------------------------------------------
 # fetch_policy_app_ids
