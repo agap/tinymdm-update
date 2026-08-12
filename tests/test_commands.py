@@ -41,11 +41,22 @@ def silent_console():
     return Console(quiet=True)
 
 
+def choice_title(choice):
+    """Flatten a questionary Choice title into plain text.
+
+    Update-picker titles are lists of (style, text) tuples so the status
+    icon can be colored; plain strings are used elsewhere.
+    """
+    if isinstance(choice.title, str):
+        return choice.title
+    return "".join(text for _, text in choice.title)
+
+
 # ---------------------------------------------------------------------------
 # needs_update detection
 # ---------------------------------------------------------------------------
 
-def test_cmd_update_prechecks_policy_when_store_newer(mocker):
+def test_cmd_update_flags_policy_when_store_newer(mocker):
     store_date = datetime(2026, 4, 1)
     last_push = store_date - timedelta(days=10)
 
@@ -66,10 +77,14 @@ def test_cmd_update_prechecks_policy_when_store_newer(mocker):
 
     cmd_update(client, cfg, silent_console())
 
-    checked = [c for c in captured_choices["choices"] if c.checked]
-    assert len(checked) == 1
+    flagged = [c for c in captured_choices["choices"] if c.value["needs_update"]]
+    assert len(flagged) == 1
+    assert "↑" in choice_title(flagged[0])
+    # Nothing is ever preselected; the ↑ marker is the only signal.
+    assert not any(c.checked for c in captured_choices["choices"])
 
-def test_cmd_update_does_not_precheck_when_store_not_newer(mocker):
+
+def test_cmd_update_does_not_flag_when_store_not_newer(mocker):
     store_date = datetime(2026, 3, 1)
     last_push = store_date + timedelta(days=5)
 
@@ -90,8 +105,10 @@ def test_cmd_update_does_not_precheck_when_store_not_newer(mocker):
 
     cmd_update(client, cfg, silent_console())
 
-    checked = [c for c in captured_choices["choices"] if c.checked]
-    assert len(checked) == 0
+    flagged = [c for c in captured_choices["choices"] if c.value["needs_update"]]
+    assert len(flagged) == 0
+    assert "✓" in choice_title(captured_choices["choices"][0])
+    assert not any(c.checked for c in captured_choices["choices"])
 
 
 # ---------------------------------------------------------------------------
@@ -290,6 +307,6 @@ def test_user_counts_aggregated_per_policy(mocker):
 
     cmd_update(client, cfg, silent_console())
 
-    titles = [c.title for c in captured_choices["choices"]]
+    titles = [choice_title(c) for c in captured_choices["choices"]]
     assert any("2 users" in t and "Policy One" in t for t in titles)
     assert any("1 user " in t and "Policy Two" in t for t in titles)
