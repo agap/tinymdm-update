@@ -5,7 +5,7 @@ import pytest
 import requests
 from rich.console import Console
 
-from tinymdm_update.commands import cmd_update
+from tinymdm_update.commands import cmd_setup, cmd_update
 from tinymdm_update.config import record_update
 
 
@@ -19,8 +19,8 @@ def make_policy(pid="pol1", name="Test Policy"):
 def make_app(aid="app1", name="com.example.app"):
     return {"id": aid, "app_type": "tinymdm_store_app", "name": name}
 
-def make_store_app(aid="app1", version="2.0.0", last_update="2026-04-01 00:00:00"):
-    return {"id": aid, "version_name": version, "last_update_date": last_update, "package_name": "com.example.app"}
+def make_store_app(aid="app1", version="2.0.0", last_update="2026-04-01 00:00:00", package_name="com.example.app"):
+    return {"id": aid, "version_name": version, "last_update_date": last_update, "package_name": package_name}
 
 def mock_response(ok=True, status_code=200):
     resp = MagicMock(spec=requests.Response)
@@ -189,14 +189,17 @@ def test_cmd_update_returns_1_when_no_config(mocker):
 # Fetch efficiency — store catalog and policy app-ids should be fetched once
 # ---------------------------------------------------------------------------
 
-def _checkbox_mock(app_selection):
-    """Mock questionary.checkbox so the first call returns app_selection and
-    every subsequent call (the per-app policy prompts) returns []."""
+def _checkbox_mock(first_answer, later_answer=None, record=None):
+    """Mock questionary.checkbox so the first call returns first_answer and
+    every subsequent call returns later_answer (default []). If record is a
+    list, each call's choices are appended to it."""
     calls = {"n": 0}
 
     def factory(prompt, choices):
         calls["n"] += 1
-        result = app_selection if calls["n"] == 1 else []
+        if record is not None:
+            record.append(choices)
+        result = first_answer if calls["n"] == 1 else (later_answer or [])
         return MagicMock(ask=MagicMock(return_value=result))
 
     return factory
@@ -310,3 +313,118 @@ def test_user_counts_aggregated_per_policy(mocker):
     titles = [choice_title(c) for c in captured_choices["choices"]]
     assert any("2 users" in t and "Policy One" in t for t in titles)
     assert any("1 user " in t and "Policy Two" in t for t in titles)
+
+
+# ---------------------------------------------------------------------------
+# setup --package filtering
+# ---------------------------------------------------------------------------
+
+def _setup_client(policy_apps, store_apps=None):
+    """policy_apps maps policy id -> set of app ids installed in it."""
+    client = make_client(
+        policies=[make_policy(pid, f"Policy {pid}") for pid in policy_apps],
+        store_apps=store_apps or [make_store_app("app1"), make_store_app("app2", package_name="com.other.app")],
+    )
+    client.fetch_policy_app_ids.side_effect = lambda pid: policy_apps[pid]
+    return client
+
+
+def _capture_setup_checkboxes(mocker, policy_answer=(), app_answer=()):
+    calls = []
+    mocker.patch(
+        "questionary.checkbox",
+        side_effect=_checkbox_mock(list(policy_answer), list(app_answer), record=calls),
+    )
+    return calls
+
+
+def test_setup_package_filters_policies(mocker):
+    client = _setup_client({"pol1": {"app1"}, "pol2": {"app2"}, "pol3": {"app1", "app2"}})
+    calls = _capture_setup_checkboxes(mocker)
+
+    rc = cmd_setup(client, {}, silent_console(), package="com.example.app")
+
+    assert rc == 0
+    assert [c.value for c in calls[0]] == ["pol1", "pol3"]
+    assert client.fetch_policy_app_ids.call_count == 3
+
+
+def test_setup_package_marks_new_policies_and_keeps_watched(mocker):
+    client = _setup_client({"pol1": {"app1"}, "pol2": {"app2"}, "pol3": {"app1"}})
+    calls = _capture_setup_checkboxes(mocker)
+    cfg = {"watched_policy_ids": ["pol1", "pol2"], "tracked_apps": []}
+
+    cmd_setup(client, cfg, silent_console(), package="com.example.app")
+
+    choices = {c.value: c for c in calls[0]}
+    assert set(choices) == {"pol1", "pol2", "pol3"}
+    assert choices["pol1"].checked and choices["pol2"].checked and not choices["pol3"].checked
+    assert "(new)" in choices["pol3"].title
+    assert "(new)" not in choices["pol1"].title
+    assert "(package not installed)" in choices["pol2"].title
+
+
+def test_setup_package_prechecks_app_and_uses_matching_policy(mocker):
+    client = _setup_client({"pol1": {"app2"}, "pol2": {"app1", "app2"}})
+    calls = _capture_setup_checkboxes(mocker, policy_answer=["pol1", "pol2"])
+    cfg = {"watched_policy_ids": ["pol1"], "tracked_apps": []}
+
+    cmd_setup(client, cfg, silent_console(), package="com.example.app")
+
+    # pol1 lacks the package, so the app list comes from pol2.
+    app_choices = {c.value["id"]: c for c in calls[1]}
+    assert set(app_choices) == {"app1", "app2"}
+    assert app_choices["app1"].checked and not app_choices["app2"].checked
+    # Store catalog is fetched once and reused for the app step.
+    assert client.fetch_store_apps.call_count == 1
+
+
+def test_setup_unknown_package_returns_1(mocker):
+    client = _setup_client({"pol1": {"app1"}})
+    checkbox = mocker.patch("questionary.checkbox")
+
+    rc = cmd_setup(client, {}, silent_console(), package="com.missing.app")
+
+    assert rc == 1
+    checkbox.assert_not_called()
+    client.fetch_policy_app_ids.assert_not_called()
+
+
+@pytest.mark.parametrize("error", [requests.HTTPError("boom"), requests.ConnectionError("down")])
+def test_setup_package_flags_policies_whose_fetch_fails(mocker, error):
+    client = _setup_client({"pol1": {"app1"}, "pol2": {"app1"}, "pol3": {"app2"}})
+    def flaky(pid):
+        if pid == "pol2":
+            raise error
+        return {"pol1": {"app1"}, "pol3": {"app2"}}[pid]
+    client.fetch_policy_app_ids.side_effect = flaky
+    calls = _capture_setup_checkboxes(mocker)
+
+    cmd_setup(client, {}, silent_console(), package="com.example.app")
+
+    choices = {c.value: c for c in calls[0]}
+    assert set(choices) == {"pol1", "pol2"}
+    assert "(check failed)" in choices["pol2"].title
+    assert "(new)" in choices["pol1"].title
+
+
+def test_setup_package_failed_source_policy_does_not_crash(mocker):
+    client = _setup_client({"pol1": {"app1"}})
+    client.fetch_policy_app_ids.side_effect = requests.Timeout("slow")
+    calls = _capture_setup_checkboxes(mocker, policy_answer=["pol1"])
+
+    rc = cmd_setup(client, {}, silent_console(), package="com.example.app")
+
+    assert rc == 0
+    assert len(calls) == 1  # no apps known, so setup stops before the app prompt
+
+
+def test_setup_without_package_lists_all_policies(mocker):
+    client = _setup_client({"pol1": {"app1"}, "pol2": {"app2"}})
+    calls = _capture_setup_checkboxes(mocker)
+
+    cmd_setup(client, {}, silent_console())
+
+    assert [c.value for c in calls[0]] == ["pol1", "pol2"]
+    assert [c.title for c in calls[0]] == ["Policy pol1", "Policy pol2"]
+    client.fetch_policy_app_ids.assert_not_called()

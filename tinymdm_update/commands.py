@@ -22,29 +22,102 @@ from tinymdm_update.config import (
 )
 
 
+def _collect_policy_app_ids(futures: dict, console: Console) -> dict[str, set[str]]:
+    """Resolve per-policy app-ID futures. Policies whose fetch failed are
+    omitted, so callers can tell "unknown" apart from "no apps"."""
+    policy_app_ids: dict[str, set[str]] = {}
+    for pid, fut in futures.items():
+        try:
+            policy_app_ids[pid] = fut.result()
+        except requests.RequestException as exc:
+            console.print(f"[yellow]Could not fetch apps for policy {pid}: {exc}[/yellow]")
+    return policy_app_ids
+
+
+def _scan_policy_app_ids(client: TinyMDMClient, policies: list, console: Console) -> dict[str, set[str]]:
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futures = {p["id"]: pool.submit(client.fetch_policy_app_ids, p["id"]) for p in policies}
+        return _collect_policy_app_ids(futures, console)
+
+
+def _policy_setup_title(
+    policy: dict,
+    existing_ids: set[str],
+    matching_ids: set[str] | None,
+    failed_ids: set[str],
+) -> str:
+    """Policy name, annotated relative to the --package filter when one is active."""
+    title = policy.get("name", policy["id"])
+    if matching_ids is None:
+        return title
+    if policy["id"] in failed_ids:
+        return title + "  (check failed)"
+    if policy["id"] not in matching_ids:
+        return title + "  (package not installed)"
+    if policy["id"] not in existing_ids:
+        return title + "  (new)"
+    return title
+
+
 def cmd_setup(
     client: TinyMDMClient,
     cfg: Config,
     console: Console,
     debug: bool = False,
-) -> None:
+    package: str | None = None,
+) -> int:
     existing_policy_ids = set(cfg.get("watched_policy_ids", []))
     existing_app_ids = {a["id"] for a in cfg.get("tracked_apps", [])}
 
-    with console.status("Fetching all policies..."):
-        policies = client.fetch_policies()
+    with console.status("Fetching policies and store catalog..."), ThreadPoolExecutor(max_workers=2) as pool:
+        policies_future = pool.submit(client.fetch_policies)
+        store_future = pool.submit(client.fetch_store_apps)
+        policies = policies_future.result()
+        all_apps = store_future.result()
 
     if not policies:
         console.print("[yellow]No policies found.[/yellow]")
-        return
+        return 0
 
     console.print(f"[dim]Found {len(policies)} policies.[/dim]\n")
+
+    package_app = None
+    policy_app_ids: dict[str, set[str]] = {}
+    matching_ids: set[str] | None = None
+    failed_ids: set[str] = set()
+    if package:
+        package_app = next((a for a in all_apps if a.get("package_name") == package), None)
+        if package_app is None:
+            known = ", ".join(sorted(a["package_name"] for a in all_apps if a.get("package_name")))
+            console.print(
+                f"[bold red]Error:[/] Package [bold]{package}[/bold] not found in the TinyMDM store. "
+                f"Available packages: {known or 'none'}"
+            )
+            return 1
+
+        with console.status(f"Scanning {len(policies)} policies for {package}..."):
+            policy_app_ids = _scan_policy_app_ids(client, policies, console)
+
+        matching_ids = {pid for pid, ids in policy_app_ids.items() if package_app["id"] in ids}
+        failed_ids = {p["id"] for p in policies} - policy_app_ids.keys()
+        summary = f"{len(matching_ids)} of {len(policies)} policies contain {package}."
+        if failed_ids:
+            summary += f" {len(failed_ids)} could not be checked and are listed as (check failed)."
+        console.print(f"[dim]{summary}[/dim]\n")
+        # Keep already-watched and unverifiable policies visible so setup doesn't silently drop them.
+        policies = [
+            p for p in policies
+            if p["id"] in matching_ids or p["id"] in existing_policy_ids or p["id"] in failed_ids
+        ]
+        if not policies:
+            console.print(f"[yellow]No policies contain {package}.[/yellow]")
+            return 0
 
     watched_ids = questionary.checkbox(
         "Select policies to watch:",
         choices=[
             questionary.Choice(
-                title=p.get("name", p["id"]),
+                title=_policy_setup_title(p, existing_policy_ids, matching_ids, failed_ids),
                 value=p["id"],
                 checked=p["id"] in existing_policy_ids,
             )
@@ -54,18 +127,21 @@ def cmd_setup(
 
     if not watched_ids:
         console.print("[yellow]No policies selected. Setup aborted.[/yellow]")
-        return
+        return 0
 
-    first_id = watched_ids[0]
-    with console.status("Fetching apps from first watched policy..."):
-        policy_app_ids = client.fetch_policy_app_ids(first_id)
-        all_apps = client.fetch_store_apps()
+    if matching_ids is not None:
+        # Every policy was already scanned; prefer one that contains the package as the app source.
+        first_id = next((pid for pid in watched_ids if pid in matching_ids), watched_ids[0])
+        first_app_ids = policy_app_ids.get(first_id, set())
+    else:
+        with console.status("Fetching apps from first watched policy..."):
+            first_app_ids = client.fetch_policy_app_ids(watched_ids[0])
 
-    apps = [a for a in all_apps if a.get("id") in policy_app_ids]
+    apps = [a for a in all_apps if a.get("id") in first_app_ids]
 
     if not apps:
         console.print("[yellow]No apps found in the first selected policy.[/yellow]")
-        return
+        return 0
 
     if debug:
         console.print("[dim]First app object (raw):[/dim]")
@@ -81,7 +157,8 @@ def cmd_setup(
                     "app_type": "tinymdm_store_app",
                     "name": app.get("name_en") or app.get("name_fr") or app.get("package_name") or app["id"],
                 },
-                checked=app["id"] in existing_app_ids,
+                checked=app["id"] in existing_app_ids
+                or (package_app is not None and app["id"] == package_app["id"]),
             )
             for app in apps
         ],
@@ -89,7 +166,7 @@ def cmd_setup(
 
     if not tracked_apps:
         console.print("[yellow]No apps selected. Setup aborted.[/yellow]")
-        return
+        return 0
 
     cfg["watched_policy_ids"] = watched_ids
     cfg["tracked_apps"] = tracked_apps
@@ -97,7 +174,7 @@ def cmd_setup(
         save_config(cfg)
     except ConfigError as exc:
         console.print(f"[bold red]Error:[/] {exc}")
-        return
+        return 1
 
     console.print(
         f"\n[bold green]Setup complete.[/bold green] "
@@ -107,6 +184,7 @@ def cmd_setup(
         f"{'app' if len(tracked_apps) == 1 else 'apps'}.\n"
         f"Config saved to [dim]{CONFIG_PATH}[/dim]"
     )
+    return 0
 
 
 def cmd_update(
@@ -173,13 +251,7 @@ def cmd_update(
                 console.print(f"[yellow]Could not fetch store catalog: {exc}[/yellow]")
                 store_apps = []
 
-            policy_app_ids: dict[str, set[str]] = {}
-            for pid, fut in policy_app_ids_futures.items():
-                try:
-                    policy_app_ids[pid] = fut.result()
-                except requests.HTTPError as exc:
-                    console.print(f"[yellow]Could not fetch apps for policy {pid}: {exc}[/yellow]")
-                    policy_app_ids[pid] = set()
+            policy_app_ids = _collect_policy_app_ids(policy_app_ids_futures, console)
 
     policy_by_id = {p["id"]: p for p in all_policies}
     watched_policies = [policy_by_id[pid] for pid in watched_ids if pid in policy_by_id]

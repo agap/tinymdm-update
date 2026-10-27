@@ -22,6 +22,11 @@ def _build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command")
     setup_p = subparsers.add_parser("setup", help="Configure watched policies and tracked apps.")
     setup_p.add_argument("--debug", **debug_kwargs)
+    setup_p.add_argument(
+        "--package",
+        metavar="PACKAGE_NAME",
+        help="Only list policies containing this app (e.g. com.truckspy.truckspy).",
+    )
     update_p = subparsers.add_parser("update", help="Update apps across watched policies (default).")
     update_p.add_argument("--debug", **debug_kwargs)
     return parser
@@ -44,8 +49,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     if args.command == "setup":
-        cmd_setup(client, cfg, console, debug=args.debug)
-        return 0
+        return cmd_setup(client, cfg, console, debug=args.debug, package=args.package)
     else:
         return cmd_update(client, cfg, console, debug=args.debug)
 

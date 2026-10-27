@@ -7,9 +7,9 @@ TinyMDM's web interface resets its filters after every policy update, making it 
 ## Features
 
 - **One-time setup** — interactively pick the policies and apps you care about; saved to `~/.config/tinymdm-update/config.json`
+- **Filter by app** — `setup --package <name>` lists only the policies that contain that app and flags newly added ones
 - **Re-runnable setup** — existing selections are pre-checked so re-configuring is non-destructive
 - **Update history** — every successful push is timestamped; future runs show when each policy was last updated and flag it as stale if the store has published a newer version since
-- **Smart pre-selection** — policies where the store version is newer than your last push are pre-checked automatically
 - **Prioritized ordering** — stale policies float to the top, with ties broken by user count ascending so the smallest rollouts come first
 - **User counts** — every policy row shows how many users are assigned, helping you stage updates from least to most disruptive
 - **Aligned policy list** — fixed-width columns make it easy to scan status at a glance
@@ -56,6 +56,14 @@ tinymdm-update setup
 
 Fetches all policies from TinyMDM, lets you select the ones you want to watch, then shows the apps installed in the first selected policy for you to track. Re-running setup at any time pre-checks your existing selections so you can add or remove entries without starting from scratch.
 
+### Only show policies that contain a specific app
+
+```bash
+tinymdm-update setup --package com.truckspy.truckspy
+```
+
+With ~100 policies, most of them irrelevant, scrolling the full list is impractical. `--package` scans every policy (one API request each, run in parallel — roughly 10 seconds for 100 policies) and only lists those that have the app installed. Policies that contain the app but aren't on your watchlist yet are marked `(new)`, so newly onboarded customers stand out. Policies you already watch stay in the list (pre-checked, marked `(package not installed)` if they no longer have the app) so re-running setup never drops them silently. Policies whose app list couldn't be fetched are shown as `(check failed)` rather than hidden. The app itself is pre-checked in the tracked-apps step.
+
 ### Daily use — roll out updates
 
 ```bash
@@ -75,7 +83,7 @@ Select policies to update  —  latest: v4.41, released Apr 12, 2026:
 
 | Symbol | Meaning |
 |--------|---------|
-| `↑` | Store has a newer version than your last push — pre-checked |
+| `↑` | Store has a newer version than your last push |
 | `✓` | Store has not been updated since your last push |
 | `?` | App is installed but never updated via this tool |
 | `-` | App is not installed in this policy |
@@ -106,7 +114,7 @@ Run the test suite:
 pytest
 ```
 
-41 tests cover config helpers, the API client, and command business logic. No real API credentials are needed — all network calls are mocked.
+57 tests cover config helpers, the API client, and command business logic. No real API credentials are needed — all network calls are mocked.
 
 ## Contributing
 
